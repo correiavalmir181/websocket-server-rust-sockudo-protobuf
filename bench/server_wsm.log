@@ -1,0 +1,8 @@
+
+🚀 Remote File Manager Server V5 - SUPER OTIMIZADO
+📡 Escutando em ws://0.0.0.0:8080
+📊 Memória/conexão: 12 bytes | Shards: 6 | Max Simultâneas: 3000
+⚙️  Config: Single-thread + Bounded channels | Activity logging: OFF
+⚡ Otimizações: O(1) admin lookup + Reduced writes + Cooperative yielding
+⚡ Aguardando conexões...
+

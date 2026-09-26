@@ -1,0 +1,157 @@
+syntax = "proto3";
+
+package wsm;
+
+// ============================================================================
+// WSM = WebSocket Manager Protocol
+// ============================================================================
+// Regra de OURO deste protocolo: o server é um ROTEADOR. Ele só precisa
+// entender o ENVELOPE (type + clientId). O PAYLOAD (comando/resposta real)
+// viaja como bytes crus, comprimido com ZSTD, e NUNCA é desserializado pelo
+// server — ele só copia os bytes de um socket pro outro.
+//
+// Por isso:
+//   - Envelope: protobuf PURO (sem ZSTD) — o server precisa ler
+//   - Payload:  protobuf + ZSTD — só os endpoints (admin/client) tocam
+//
+// Formato no fio (WebSocket binary frame):
+//   [1 byte flags][envelope protobuf]
+// flags:
+//   bit 7 (0x80): 1 = mensagem de controle em JSON puro (backward-compat)
+//   bit 6 (0x40): 1 = payload está comprimido com ZSTD
+//   bits 0-5:     reservados (0)
+//
+// Detectar JSON vs protobuf: byte 0 == '{' (0x7B) => JSON legado; caso
+// contrário é o byte de flags de uma mensagem protobuf.
+
+// ---------------------------------------------------------------------------
+// Mensagens de CONTROLE (server lê e age; continuam em JSON no fio por
+// simplicidade e compatibilidade — auth, identification, welcome, listas)
+// ---------------------------------------------------------------------------
+
+// Envelope: ADMIN -> SERVER
+message AdminEnvelope {
+  AdminCommandType type = 1;
+  uint32 client_id = 2;       // alvo (send_to_client / kick / get_client_state)
+  bytes payload = 3;          // ZSTD(ClientCommand) — server nunca toca
+  // broadcast: payload é replicado para TODOS os clientes do admin
+}
+
+enum AdminCommandType {
+  ADMIN_UNSPECIFIED = 0;
+  ACT_SEND_TO_CLIENT = 1;
+  ACT_BROADCAST_TO_CLIENTS = 2;
+  ACT_LIST_CLIENTS = 3;
+  ACT_LIST_ADMINS = 4;
+  ACT_SERVER_STATUS = 5;
+  ACT_KICK_CLIENT = 6;
+  ACT_GET_CLIENT_STATE = 7;
+  ACT_PING = 8;
+}
+
+// Envelope: SERVER -> ADMIN
+message ServerToAdmin {
+  ServerAdminType type = 1;
+  uint32 client_id = 2;
+  bytes payload = 3;          // ZSTD(ClientResponse) — repassado cru
+  // Campos de controle (só preenchidos em seus tipos):
+  bool success = 4;           // command_result
+  string message = 5;         // command_result / error
+  uint32 client_count = 6;    // command_result de broadcast
+  ClientList clients = 7;     // list_clients
+  AdminList admins = 8;       // list_admins
+  ServerStatus status = 9;    // server_status
+  ClientState state = 10;     // get_client_state
+}
+
+enum ServerAdminType {
+  SERVER_ADMIN_UNSPECIFIED = 0;
+  SAT_COMMAND_RESULT = 1;
+  SAT_CLIENT_MESSAGE = 2;
+  SAT_CLIENT_CONNECTED = 3;
+  SAT_CLIENT_DISCONNECTED = 4;
+  SAT_ADMIN_WELCOME = 5;
+  SAT_CLIENT_LIST = 6;
+  SAT_ADMIN_LIST = 7;
+  SAT_SERVER_STATUS = 8;
+  SAT_CLIENT_STATE = 9;
+  SAT_ERROR = 10;
+  SAT_PONG = 11;
+}
+
+message ClientInfo {
+  uint32 id = 1;
+  string address = 2;
+  uint32 port = 3;
+  string device_type = 4;
+  string android_id = 5;
+  uint64 connected_at = 6;    // epoch millis
+  uint64 message_count = 7;
+  bool is_alive = 8;
+  string wallpaper = 9;
+}
+
+message ClientList {
+  repeated ClientInfo clients = 1;
+  uint32 total = 2;
+}
+
+message AdminInfo {
+  uint32 id = 1;
+  string address = 2;
+  uint32 port = 3;
+  uint64 connected_at = 4;
+  uint64 message_count = 5;
+}
+
+message AdminList {
+  repeated AdminInfo admins = 1;
+  uint32 total = 2;
+}
+
+message ServerStatus {
+  uint32 port = 1;
+  uint32 clients = 2;
+  uint32 admins = 3;
+  uint64 uptime_seconds = 4;
+  uint32 max_capacity = 5;
+}
+
+message ClientState {
+  string current_path = 1;
+  repeated string selected_files = 2;
+  uint64 last_update = 3;
+}
+
+// ---------------------------------------------------------------------------
+// Envelope: SERVER -> CLIENT
+// ---------------------------------------------------------------------------
+message ServerToClient {
+  ServerClientType type = 1;
+  uint32 client_id = 2;       // clientId do welcome
+  bytes payload = 3;          // ZSTD(ClientCommand) — repassado cru
+  string reason = 4;          // disconnect / kick
+  string timestamp = 5;       // RFC3339 do welcome (cache do server)
+}
+
+enum ServerClientType {
+  SERVER_CLIENT_UNSPECIFIED = 0;
+  SCT_CLIENT_WELCOME = 1;
+  SCT_CLIENT_COMMAND = 2;         // payload = ZSTD(ClientCommand)
+  SCT_CLIENT_KICK = 3;
+  SCT_CLIENT_DISCONNECT = 4;
+  SCT_CLIENT_ERROR = 5;
+}
+
+// Envelope: CLIENT -> SERVER
+message ClientToServer {
+  ClientServerType type = 1;
+  bytes payload = 3;          // ZSTD(ClientResponse) — server nunca toca
+  string timestamp = 4;       // RFC3339 (cache do server)
+}
+
+enum ClientServerType {
+  CLIENT_SERVER_UNSPECIFIED = 0;
+  CST_CLIENT_RESPONSE = 1;        // payload = ZSTD(ClientResponse)
+  CST_CLIENT_HEARTBEAT = 2;
+}

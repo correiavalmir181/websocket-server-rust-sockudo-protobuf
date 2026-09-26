@@ -1,0 +1,1 @@
+/home/guiwolff/projects/admin/websocket-server-rust-sockudo-5-2/bench/load-client/target/release/load-client: /home/guiwolff/projects/admin/websocket-server-rust-sockudo-5-2/bench/load-client/src/main.rs

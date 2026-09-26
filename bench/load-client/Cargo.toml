@@ -1,0 +1,45 @@
+[package]
+name = "load-client"
+version = "0.2.0"
+edition = "2021"
+
+[[bin]]
+name = "load-client"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1.0", features = ["full"] }
+sockudo-ws = { git = "https://github.com/sockudo/sockudo-ws", tag = "v2.0.1", default-features = false, features = ["tokio-runtime", "simd", "fastrand", "sha1_smol"] }
+futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
+bytes = "1"
+zstd = "0.13"
+
+# ⚡ Parsing de argumentos e de URL — antes era tudo na mão (std::env::args
+# posicional); agora com --server-bin, --cpu-quota, --mem-max, --url etc.
+# vale a pena um parser de verdade em vez de ir empilhando if/else.
+clap = { version = "4", features = ["derive"] }
+url = "2"
+
+# ⚡ Suporte a wss:// (TLS), pra quando o teste for contra um servidor
+# remoto na nuvem atrás de um proxy com TLS. webpki-roots embute a lista de
+# CAs da Mozilla no binário — não depende de ca-certificates instalado na
+# máquina que roda o teste.
+# ⚡ rustls 0.23 não seleciona provedor de criptografia sozinho — precisa
+# habilitar "ring" (ou "aws-lc-rs") explicitamente, e ainda assim instalar
+# em runtime (ver main()). Sem isso, toda conexão wss:// falha com erro de
+# "no process-level CryptoProvider available".
+tokio-rustls = "0.26"
+rustls = { version = "0.23", features = ["ring"] }
+webpki-roots = "0.26"
+
+# ⚡ Só pra ler sysconf(_SC_CLK_TCK) de um jeito auditado em vez de eu
+# escrever o extern "C" na mão sem poder compilar pra conferir a ABI.
+libc = "0.2"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
+# SEM panic='abort': isso é ferramenta de diagnóstico, queremos ver a stack
+# trace se algo inesperado quebrar, não o processo inteiro morrendo mudo.
