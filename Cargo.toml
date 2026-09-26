@@ -1,0 +1,125 @@
+[package]
+name = "remote-file-manager"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+# Logs detalhados por mensagem são úteis para diagnóstico, mas muito caros em
+# produção. Ative explicitamente com `--features activity-logging`.
+default = []
+activity-logging = []
+# ⚡ Instrumentação TEMPORÁRIA de profiling: acumula nanosegundos gastos em
+# cada etapa do hot path e imprime a cada 5s. Não altera a lógica — é só
+# medição. Nunca use em produção (custa ~0.2% de CPU por mensagem).
+profile = []
+
+#[[bin]]
+#name = "websocket-server"
+#path = "src/main.rs"
+
+#[[bin]]
+#name = "websocket-server-optimized"
+#path = "src/main_optimized.rs"
+
+[[bin]]
+name = "websocket-server"
+path = "src/main.rs"
+
+[build-dependencies]
+prost-build = "0.14"
+# protoc estático pré-compilado: prost-build exige o binário protoc no PATH;
+# o vendoring garante que `cargo build` funcione em qualquer máquina/Docker
+# sem instalar nada extra. Se a env var PROTOC existir, ela tem precedência.
+protoc-bin-vendored = "3.2"
+
+[dependencies]
+tokio = { version = "1.0", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+# ⚡ raw_value: permite capturar o JSON aninhado de "message" SEM parsear
+# (zero alocação de árvore) e reemitir os bytes originais sem serializar de
+# novo. É o maior ganho individual no caminho de send_to_client.
+serde_json = { version = "1.0", features = ["raw_value"] }
+chrono = "0.4"
+hyper = { version = "1.0", features = ["full"] }
+hyper-util = { version = "0.1", features = ["full"] }
+http-body-util = "0.1"
+# ⚡ Extensões Sink/Stream pra usar o WebSocketStream NÃO-split (um único task
+# por conexão, sem driver task/oneshot round-trip por mensagem). Já está na
+# árvore de dependências do sockudo-ws, então não adiciona tempo de build.
+futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
+
+# ⚡ Protobuf + ZSTD no roteamento de mensagens (v7).
+# O server é um ROTEADOR: só lê o envelope protobuf (type + clientId) e
+# repassa o payload (ZSTD-compressed) byte a byte — nunca desserializa nem
+# descomprime o conteúdo real do comando. Payloads grandes (file lists,
+# screenshots) chegam comprimidos no cliente com custo zero no server.
+prost = "0.13"
+zstd = "0.13"
+
+# ⚡ Troca de tokio-tungstenite/hyper-tungstenite por sockudo-ws.
+# Mantivemos hyper só pra fazer o handshake HTTP/upgrade (igual o exemplo Axum
+# do próprio sockudo-ws) e o endpoint /health; o parsing de frame WebSocket em
+# si passa a ser feito pelo sockudo-ws.
+#
+# ⚡ Upgrade 1.7.4 -> 2.0.1 (2026-07-25, ainda não publicado no crates.io,
+# só via git — por isso a dependência aponta pra tag da release em vez de
+# `version = "..."`). Principais mudanças relevantes pra gente, ver
+# CHANGELOG.md do próprio projeto:
+#   - split() continua devolvendo (SplitReader, SplitWriter) na mesma ordem
+#     e com os mesmos métodos (.next()/.send()) — nenhuma mudança de código
+#     necessária além da troca de versão.
+#   - SplitWriter agora é um "bounded command handle": existe um driver
+#     dedicado por conexão que prioriza Pong/Close/heartbeat automáticos
+#     mesmo se a aplicação não estiver chamando send()/flush() — ajuda
+#     bastante com clientes Android em rede instável, que é exatamente o
+#     nosso caso.
+#   - `ping_interval`/`pong_timeout`/`idle_timeout` agora fecham a conexão
+#     de fato quando o peer para de responder (antes só eram flags). Usamos
+#     isso abaixo pra derrubar conexões mortas sozinho, sem depender só do
+#     heartbeat manual em AdminMetadata/ClientMetadata — libera memória mais
+#     rápido em vez de deixar conexão zumbi presa num shard.
+#
+# Features escolhidas para MÁXIMA PERFORMANCE com poucos recursos
+# (default-features = false, então só entra o que está listado):
+#   - tokio-runtime : runtime que já usamos em todo o resto do server.
+#   - simd          : mascaramento de frame e validação UTF-8 via
+#                     AVX2/AVX-512/SSE2/NEON — puro ganho de CPU, sem custo.
+#   - fastrand      : PRNG rápido pra gerar a máscara de frame (client mask);
+#                     muito mais barato que getrandom/rand_rng e não
+#                     precisamos de RNG criptográfico aqui.
+#   - sha1_smol     : SHA-1 puro Rust só pro handshake HTTP (Sec-WebSocket-
+#                     Accept). Evita puxar ring/aws-lc/OpenSSL só por causa
+#                     de UM hash por conexão — reduz árvore de dependências,
+#                     tempo de build e tamanho do binário.
+# ⚡ VARIANTE SEM MIMALLOC: testamos com mimalloc e ele reduz throughput
+# efetivo porque infla RSS ~3x (94MB -> 284MB com 2999 conexões) sem ganho
+# de throughput que justifique — as otimizações reais desta versão são o
+# `raw_value` no serde_json e abandonar `.split()` do sockudo-ws (ver
+# comentários no main.rs), não o alocador. Fica de fora de propósito aqui.
+# De propósito NÃO habilitamos: permessage-deflate (compressão custa CPU por
+# mensagem e nossas mensagens JSON já são pequenas), http2/http3/io-uring
+# (não usamos, só inflariam o binário) e nenhuma feature de TLS (o server
+# fala ws:// puro; TLS fica a cargo de um proxy na frente, ex. Render/Nginx).
+
+#boa performance:
+#sockudo-ws = { git = "https://github.com/sockudo/sockudo-ws", tag = "v2.0.1", default-features = false, features = ["tokio-runtime", "simd", "fastrand", "sha1_smol"] }
+
+sockudo-ws = { git = "https://github.com/sockudo/sockudo-ws", tag = "v2.0.1", default-features = false, features = ["tokio-runtime", "simd", "fastrand", "sha1_smol"] }
+
+
+lru = "0.7.0"
+once_cell = "1.21.3"
+arc-swap = "1.6.0"
+rustc-hash = "2"
+
+# KeepAlive HTTP client (rustls em vez de native-tls para evitar dependência de OpenSSL)
+reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"] }
+prost-build = "0.14.4"
+
+[profile.release]
+opt-level = 3           # Máxima otimização
+lto = "thin"            # LTO leve (melhor para poucos recursos)
+#lto = true            # Link Time Optimization (10-20% mais rápido)
+codegen-units = 1       # Menor binário, melhor performance
+strip = true            # Remove todos símbolos de debug
+panic = 'abort'         # Reduz tamanho do binário 
